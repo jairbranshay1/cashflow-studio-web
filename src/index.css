@@ -1,0 +1,23 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  font-family: system-ui, -apple-system, BlinkMacSystemFont, "SF Pro Text",
+    "Segoe UI", sans-serif;
+  color-scheme: dark;
+}
+
+/* Page background + text color */
+body {
+  @apply m-0 bg-slate-950 text-slate-50;
+}
+
+/* Reuse this on inputs in the wizard */
+.input {
+  @apply rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-50;
+}
+
+.input:focus {
+  @apply outline-none border-emerald-500;
+}
