@@ -1,6 +1,21 @@
 import React, { useEffect, useState } from "react";
+import { supabase } from "./lib/supabaseClient";
 
-type Plan = "free" | "pro";
+
+
+
+const STRIPE_MONTHLY_URL = "https://buy.stripe.com/4gM9AU60oakcapP3SS6AM00";
+const STRIPE_YEARLY_URL = "https://buy.stripe.com/7sYbJ23Sg63WeG59dc6AM01";
+
+function openStripeCheckout(billing: "monthly" | "yearly") {
+  const url = billing === "monthly" ? STRIPE_MONTHLY_URL : STRIPE_YEARLY_URL;
+  if (!url) {
+    alert("Stripe link not set up yet.");
+    return;
+  }
+  window.open(url, "_blank");
+}
+
 
 type OfferType = "workshop" | "program" | "digital" | "coaching";
 
@@ -40,6 +55,7 @@ export interface Offer {
   currency: string;
   status: OfferStatus;
   createdAt: string;
+  plan?: Plan;
 }
 
 type View =
@@ -49,20 +65,118 @@ type View =
   | "wizard"
   | "offerDetail";
 
-interface User {
+type Plan = "free" | "pro"; // use whichever Plan definition you're keeping
+type AppUser = {
   id: string;
   email: string;
   plan: Plan;
-}
+  // any other fields you want to keep
+};
+
 
 const LOCAL_STORAGE_USER_KEY = "cashflowStudioUser";
 const LOCAL_STORAGE_OFFERS_KEY = "cashflowStudioOffers";
 
 const App: React.FC = () => {
   const [view, setView] = useState<View>("landing");
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<AppUser | null>(null);
   const [offers, setOffers] = useState<Offer[]>([]);
   const [selectedOfferId, setSelectedOfferId] = useState<string | null>(null);
+    // Save the currently selected offer to Supabase
+  const saveCurrentOffer = async () => {
+    // 1) Must be logged in
+    if (!user) {
+      alert("Please log in to save your offer.");
+      setView("auth");
+      return;
+    }
+
+    // 2) Pick an offer to save (selected one, or the first one)
+    const offerToSave =
+      offers.find((o) => o.id === selectedOfferId) || offers[0];
+
+    if (!offerToSave) {
+      alert("No offer to save yet.");
+      return;
+    }
+
+    try {
+      // 3) Call your helper at the bottom of the file
+      await saveOfferToSupabase(user.id, offerToSave);
+      alert("Offer saved to Supabase! 🎉");
+    } catch (err) {
+      console.error("Error saving offer:", err);
+      alert("Could not save offer. Check the console for details.");
+    }
+  };
+
+   // 🔐 Keep App in sync with Supabase auth (login / logout / refresh)
+  useEffect(() => {
+    const init = async () => {
+      const { data, error } = await supabase.auth.getSession();
+
+      if (error) {
+        console.error("Error getting session", error);
+        return;
+      }
+
+      const session = data.session;
+
+      if (session?.user) {
+        const appUser: AppUser = {
+          id: session.user.id,
+          email: session.user.email ?? "",
+          plan: "free", // default for now – later we’ll pull this from Supabase
+        };
+
+        setUser(appUser);
+        localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(appUser));
+        setView("dashboard");
+      }
+    };
+
+    init();
+
+    const {
+      data: { subscription },
+    } = supabase.auth.onAuthStateChange((_event, session) => {
+      if (session?.user) {
+        const appUser: AppUser = {
+          id: session.user.id,
+          email: session.user.email ?? "",
+          plan: "free",
+        };
+
+        setUser(appUser);
+        localStorage.setItem(LOCAL_STORAGE_USER_KEY, JSON.stringify(appUser));
+        setView("dashboard");
+      } else {
+        setUser(null);
+        localStorage.removeItem(LOCAL_STORAGE_USER_KEY);
+        setView("landing");
+      }
+    });
+
+    // cleanup on unmount
+    return () => {
+      subscription.unsubscribe();
+    };
+  }, []);
+
+  // 💾 Load from localStorage on first render
+  useEffect(() => {
+    const storedUser = localStorage.getItem(LOCAL_STORAGE_USER_KEY);
+    if (storedUser) {
+      setUser(JSON.parse(storedUser));
+    }
+
+    const storedOffers = localStorage.getItem(LOCAL_STORAGE_OFFERS_KEY);
+    if (storedOffers) {
+      setOffers(JSON.parse(storedOffers));
+    }
+  }, []);
+
+
 
   // Load from localStorage on first render
   useEffect(() => {
@@ -91,7 +205,7 @@ const App: React.FC = () => {
   }, [offers]);
 
   const handleLogin = (email: string) => {
-    const newUser: User = {
+    const newUser: AppUser = {
       id: "user-" + Date.now(),
       email,
       plan: "free", // default – you’ll wire up billing later
@@ -237,8 +351,36 @@ const App: React.FC = () => {
         <div className="w-full max-w-5xl p-4 md:p-8 space-y-8">
           <DashboardHeader user={user} offersCount={offersCount} />
           {reachedFreeLimit && (
+          
             <PlanUpgradeNotice maxFreeOffers={maxFreeOffers} />
           )}
+              <main className="flex-1 flex justify-center">
+      <div className="w-full max-w-5xl p-4 md:p-8 space-y-8">
+        <DashboardHeader user={user} offersCount={offersCount} />
+        {reachedFreeLimit && (
+          <PlanUpgradeNotice maxFreeOffers={maxFreeOffers} />
+        )}
+
+        {/* ✅ ADD THIS BUTTON */}
+        <div className="pt-2">
+          <button
+            onClick={saveCurrentOffer}   // <-- this is the onClick hook-up
+            className="w-full rounded-lg bg-emerald-500 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400 transition"
+          >
+            Save current offer to Supabase
+          </button>
+        </div>
+
+        {/* existing dashboard content continues below */}
+        {/* ... */}
+      </div>
+    </main>
+
+
+        {/* existing sections like offers list / wizard go here */}
+      </div>
+    </main>
+
           <div className="flex justify-between items-center">
             <h2 className="text-xl font-semibold">Your Offers</h2>
             <button
@@ -264,9 +406,9 @@ const App: React.FC = () => {
             }}
           />
         </div>
-      </main>
-      <Footer />
-    </div>
+    
+    
+
   );
 };
 
@@ -275,7 +417,7 @@ const App: React.FC = () => {
 // -----------------
 
 const Header: React.FC<{
-  user: User | null;
+  user: AppUser | null;
   onLoginClick: () => void;
   onDashboardClick: () => void;
   onLogout?: () => void;
@@ -297,6 +439,14 @@ const Header: React.FC<{
           </div>
         </button>
         <div className="flex items-center gap-3 text-sm">
+                  {/* Go Pro button in header */}
+          <button
+            onClick={() => openStripeCheckout("monthly")}
+            className="hidden rounded-full border border-emerald-500/60 px-3 py-1 text-xs font-semibold text-emerald-300 hover:bg-emerald-500/10 md:inline-flex"
+          >
+            Go Pro – $21/mo
+          </button>
+
           {!user && (
             <>
               <button
@@ -331,77 +481,115 @@ const Header: React.FC<{
 
 const Landing: React.FC<{ onGetStarted: () => void }> = ({ onGetStarted }) => {
   return (
-    <div className="max-w-6xl mx-auto px-4 py-12 md:py-20">
-      <div className="grid md:grid-cols-2 gap-10 items-center">
-        <div className="space-y-6">
-          <span className="inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 text-emerald-300 border border-emerald-500/40">
+    <div className="grid gap-10 md:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)] items-start">
+      {/* LEFT: Hero content */}
+      <div className="space-y-6">
+        <div>
+          <span className="inline-flex items-center rounded-full bg-emerald-500/10 px-3 py-1 text-[11px] font-medium text-emerald-300">
             For IG, TikTok & YouTube educators
           </span>
-          <h1 className="text-3xl md:text-5xl font-semibold leading-tight">
+        </div>
+
+        <div className="space-y-3">
+          <h1 className="text-3xl font-semibold tracking-tight text-slate-50 md:text-4xl lg:text-[40px]">
             Turn your content into a{" "}
             <span className="text-emerald-400">clear, sellable offer</span> in
             under an hour.
           </h1>
-          <p className="text-slate-300 text-sm md:text-base">
+          <p className="max-w-xl text-sm text-slate-300">
             Cashflow Studio walks you through choosing your offer, structuring
             it, pricing it, and then writes your landing page copy, social posts
             and DM script — so you can finally say “yes” when people ask if you
             coach or have a program.
           </p>
-          <div className="flex flex-wrap gap-3 items-center">
+        </div>
+
+        {/* Main CTA */}
+        <div className="flex flex-col gap-2 text-xs text-slate-400 md:flex-row md:items-center md:gap-3">
+          <button
+            onClick={onGetStarted}
+            className="inline-flex items-center justify-center rounded-full bg-emerald-500 px-5 py-2 text-sm font-semibold text-slate-950 hover:bg-emerald-400 md:text-base"
+          >
+            Get started free
+          </button>
+          <span>No credit card required · 1 offer free</span>
+        </div>
+
+        {/* Bullets */}
+        <ul className="space-y-1 text-xs text-slate-300 md:text-sm">
+          <li>• Guided Offer Wizard — workshop, program, digital, or 1:1</li>
+          <li>• Auto-generated landing page layout & copy</li>
+          <li>• Launch scripts for posts & DMs</li>
+        </ul>
+      </div>
+
+      {/* RIGHT: Plans box */}
+      <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 md:p-6 space-y-5">
+        <h2 className="text-lg font-semibold text-slate-50">Plans</h2>
+
+        <div className="mt-2 grid gap-4 md:grid-cols-2">
+          {/* Starter / Free plan */}
+          <div className="rounded-2xl border border-slate-800 bg-slate-950/60 p-4">
+            <h3 className="text-sm font-semibold text-slate-100">Starter</h3>
+            <p className="mt-1 text-xs text-slate-400">
+              Best for testing your first offer.
+            </p>
+            <div className="mt-3 text-2xl font-bold text-slate-50">$0</div>
+            <p className="text-[11px] text-slate-500">1 full offer</p>
+            <ul className="mt-3 space-y-1 text-[11px] text-slate-300">
+              <li>• 1 full offer</li>
+              <li>• Full offer structure</li>
+              <li>• Preview of sales copy</li>
+            </ul>
             <button
               onClick={onGetStarted}
-              className="px-5 py-2.5 rounded-lg bg-emerald-500 hover:bg-emerald-400 text-slate-950 font-semibold text-sm"
+              className="mt-4 w-full rounded-full bg-slate-800 px-4 py-2 text-xs font-semibold text-slate-100 hover:bg-slate-700"
             >
               Get started free
             </button>
-            <span className="text-xs text-slate-400">
-              No credit card required · 1 offer free
-            </span>
           </div>
-          <ul className="text-xs md:text-sm text-slate-300 space-y-1">
-            <li>• Guided Offer Wizard — workshop, program, digital, or 1:1</li>
-            <li>• Auto-generated landing page layout & copy</li>
-            <li>• Launch scripts for posts & DMs</li>
-          </ul>
-        </div>
-        <div className="bg-slate-900/60 border border-slate-800 rounded-2xl p-5 md:p-6 space-y-5">
-          <h2 className="text-lg font-semibold">Plans</h2>
-          <div className="grid gap-4 md:grid-cols-2">
-            <div className="rounded-xl border border-slate-700 bg-slate-900/60 p-4 space-y-2 text-sm">
-              <div className="font-semibold">Starter</div>
-              <div className="text-2xl font-bold">$0</div>
-              <ul className="text-xs text-slate-300 space-y-1">
-                <li>• 1 full offer</li>
-                <li>• Full offer structure</li>
-                <li>• Preview of sales copy</li>
-              </ul>
+
+          {/* Pro plan */}
+          <div className="rounded-2xl border border-emerald-500/60 bg-slate-900/70 p-4 shadow-[0_0_30px_rgba(16,185,129,0.3)]">
+            <div className="flex items-center justify-between">
+              <h3 className="text-sm font-semibold text-emerald-300">Pro</h3>
+              <span className="rounded-full bg-emerald-500/10 px-2 py-0.5 text-[10px] font-medium text-emerald-300">
+                Best for launching
+              </span>
             </div>
-            <div className="rounded-xl border border-emerald-500 bg-slate-900/80 p-4 space-y-2 text-sm">
-              <div className="flex items-center justify-between">
-                <div className="font-semibold">Pro</div>
-                <span className="text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/20 text-emerald-200">
-                  Best for launching
-                </span>
-              </div>
-              <div className="text-2xl font-bold">$21</div>
-              <div className="text-xs text-slate-300">per month</div>
-              <div className="text-[11px] text-emerald-300">
-                or $202/year (≈20% off)
-              </div>
-              <ul className="text-xs text-slate-300 space-y-1 pt-1">
-                <li>• Unlimited offers</li>
-                <li>• Full landing page copy</li>
-                <li>• Social posts & DM scripts</li>
-                <li>• Export & future templates</li>
-              </ul>
+            <div className="mt-3 text-2xl font-bold text-emerald-300">$21</div>
+            <p className="text-[11px] text-slate-400">per month</p>
+            <p className="text-[11px] text-emerald-300">
+              or $202/year (≈20% off)
+            </p>
+            <ul className="mt-3 space-y-1 text-[11px] text-slate-200">
+              <li>• Unlimited offers</li>
+              <li>• Full landing page copy</li>
+              <li>• Social posts & DM scripts</li>
+              <li>• Priority feature suggestions</li>
+            </ul>
+
+            <div className="mt-4 grid grid-cols-1 gap-2">
+              <button
+                onClick={() => openStripeCheckout("monthly")}
+                className="w-full rounded-full bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 hover:bg-emerald-400"
+              >
+                Go Pro – $21/mo
+              </button>
+              <button
+                onClick={() => openStripeCheckout("yearly")}
+                className="w-full rounded-full border border-emerald-400/70 bg-transparent px-4 py-2 text-[11px] font-medium text-emerald-300 hover:bg-emerald-500/10"
+              >
+                Or $202/year (≈20% off)
+              </button>
             </div>
           </div>
-          <p className="text-xs text-slate-400">
-            You can start on the free plan and upgrade once you’re ready to
-            launch multiple offers.
-          </p>
         </div>
+
+        <p className="text-xs text-slate-400">
+          You can start on the free plan and upgrade once you&apos;re ready to
+          launch multiple offers.
+        </p>
       </div>
     </div>
   );
@@ -459,7 +647,7 @@ const AuthForm: React.FC<{
   );
 };
 
-const DashboardHeader: React.FC<{ user: User; offersCount: number }> = ({
+const DashboardHeader: React.FC<{ user: AppUser; offersCount: number }> = ({
   user,
   offersCount,
 }) => {
@@ -543,7 +731,7 @@ const OffersList: React.FC<{
 // -----------------
 
 interface OfferWizardProps {
-  user: User;
+  user: AppUser;
   onCancel: () => void;
   onComplete: (offer: Offer) => void;
 }
@@ -1290,6 +1478,31 @@ function generateCTASection(offer: Offer): string {
     `→ Tap the button to join ${offer.name} for ${priceLine}.`,
     "Spots may be limited depending on how many people we can realistically support well.",
   ].join("\n");
+}
+// --- Supabase helper: save one offer for a user ---
+async function saveOfferToSupabase(userId: string, offer: Offer) {
+  // adjust table/column names to match your Supabase `offers` table
+  const { data, error } = await supabase
+    .from("offers")
+    .upsert(
+      {
+        id: offer.id,          // make sure offer.id exists; otherwise remove this and let Supabase generate it
+        user_id: userId,
+        plan: offer.plan ?? "free",
+        data: offer,           // if you have a `data` JSONB column – easiest way to store the whole offer
+        updated_at: new Date().toISOString(),
+      },
+      { onConflict: "id" }     // if you have a unique constraint on `id`
+    )
+    .select()
+    .single();
+
+  if (error) {
+    console.error("Error saving offer to Supabase", error);
+    throw error;
+  }
+
+  return data;
 }
 
 export default App;
